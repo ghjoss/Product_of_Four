@@ -1,0 +1,12 @@
+[package]
+name = "Product_of_Four"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sqlx = { version = "0.5", features= ["runtime-async-std-native-tls", "mysql"]}
+async-std = {version = "1",features = ["attributes"]}
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+[lints.rust]
+non_snake_case = {level = "allow"}
