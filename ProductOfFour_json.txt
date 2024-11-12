@@ -1,9 +1,10 @@
 {
     "_1":"This is a template file, replace fields as needed",
     "_2":"to connect to the database",
+    "_2a":"start and end of main loop",
     "start":1,
-    "end":55100,
-"_3":"--------------------------------",
+    "end":55101,
+    "_3":"--------------------------------",
     "_4":"Table names",
     "oddOnlyResults_table":"oddOnlyResults",
     "pairs_table":"pairs",
@@ -14,6 +15,8 @@
     "db_port":"5432",
     "db_ip_address":"localhost",
     "db_name":"Pof4",
+    "_6.5 Credentials: (set read_credentials_at_runtime=false to specify username and password here.)"
+    "read_credentials_at_runtime":true,
     "username":"user",
     "password":"password",
     "_7":"Note: program connection string uses format!()",

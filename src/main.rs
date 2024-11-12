@@ -1,8 +1,13 @@
-use sqlx::MySqlPool;
+use sqlx::{PgPool};
 use std::error::Error;
-use std::env;
+use std::env::{self};
 use std::fs;
+use tokio;
+use tokio::io::{self,stdin, AsyncBufReadExt};
+use std::process;
 use serde_json;
+
+//use futures::stream::StreamExt;
 
   
 ///	The product of four integers in an arithmetic progression of four integers when 
@@ -51,7 +56,7 @@ use serde_json;
 /// 
 /// Args: program has no input arguments.
 /// Result: Ok or error.
-#[async_std::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // JSON file definition and reading
     let current_dir = env::current_dir()?;
@@ -64,26 +69,62 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // convert string into a serde_json::Value
     let v: serde_json::Value = serde_json::from_str(&contents)?;
 
-    let drop_and_create_tables: bool = v["drop_and_create_tables"].as_bool().unwrap();
-    let start_of_loop: u64 = v["start"].as_u64().unwrap();
-    let end_of_loop: u64 = v["end"].as_u64().unwrap();
+    let start_of_loop = v["start"].as_i64().unwrap();
+    let end_of_loop = v["end"].as_i64().unwrap();
+
     let odd_only_results_table: &str = v["oddOnlyResults_table"].as_str().unwrap();
     let pairs_table: &str = v["pairs_table"].as_str().unwrap();
-    let connection_string: &str = v["connection_string"].as_str().unwrap();
+    let drop_and_create_tables = v["drop_and_create_tables"].as_bool().unwrap();
+    let db_port: &str = v["db_port"].as_str().unwrap();
+    let db_ip_address: &str = v["db_ip_address"].as_str().unwrap();
+    let db_name: &str = v["db_name"].as_str().unwrap();
+    
+    let read_credentials_at_runtime = v["read_credentials_at_runtime"].as_bool().unwrap();
+    let mut user = String::from("");
+    let mut pwd = String::from("");
+
+    if read_credentials_at_runtime {
+        let stdin = stdin();
+        let reader = io::BufReader::new(stdin);
+        let mut lines = reader.lines();
+        println!("Enter the database user id:");
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.is_empty() {
+                eprintln!("user id was not specified");
+                process::exit(1);
+            }
+            user = line.clone();
+            break;
+        }
+        println!("Enter the database password:");
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.is_empty() {
+                eprintln!("Password was not specified.");
+                process::exit(1);
+            }
+            pwd = line.clone();
+            break;
+        }
+    
+    }
+    else {
+        let temp: &str = v["username"].as_str().unwrap();
+        user = temp.to_string();
+        let temp: &str = v["password"].as_str().unwrap();
+        pwd = temp.to_string();
+    }
 
     println!("Parameters:");
-    println!("\tdrop_and_create_tables: {}\n \
-    \tstart_of_loop: {}\n \
-    \tend_of_loop: {}\n \
-    \tconnection_string: {}",
-    drop_and_create_tables,start_of_loop,end_of_loop,connection_string);
+    println!("
+    \tip_address:port : {}:{}\n \
+    \tdatabase name: {}\n \
+    \toddonlyresults table name: {} \
+    \tpairs table name: {}\n\n",
+    db_ip_address,db_port,db_name,odd_only_results_table,pairs_table);
 
-    println!("\n \
-    \tpairs table name: {}\n \
-    \toddOnlyResults table name: {}",
-    pairs_table,odd_only_results_table);
-
-    let pool = MySqlPool::connect(connection_string).await?;
+    let connection_string = format!("postgres://{}:{}@{}:{}/{}",user,pwd,db_ip_address,db_port,db_name);
+    // let pool = sqlx::postgres::PgPool::connect(connection_string).await?;
+    let pool = PgPool::connect(&connection_string).await?;
 
     if drop_and_create_tables {
         println!("Table DROP and CREATE");
@@ -103,10 +144,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let qry_str = format!(
             "CREATE TABLE {} ( \
-                    sqrt BIGINT UNSIGNED NOT NULL, \
-                    sequenceStart BIGINT UNSIGNED NOT NULL, \
-                    increment BIGINT UNSIGNED DEFAULT NULL, \
-                    PRIMARY KEY (sqrt,sequenceStart) \
+                    sqrt BIGINT NOT NULL, \
+                    sequenceStart BIGINT NOT NULL, \
+                    increment INT UNSIGNED DEFAULT NULL, \
+                    CONSTRAINT pairs_pk PRIMARY KEY (sqrt,sequenceStart) \
             )",
             pairs_table);
         let expect_str = format!("Failed to create table '{}'",pairs_table);
@@ -118,8 +159,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let qry_str = format!(
             "CREATE TABLE {} ( \
                     sqrt BIGINT UNSIGNED NOT NULL, \
-                    sigma2mod100 INT UNSIGNED DEFAULT NULL, \
-                    PRIMARY KEY (sqrt) \
+                    sigma2 VARCHAR(75) DEFAULT NULL, \
+                    CONSTRAINT oddonlyresults_pk PRIMARY KEY (sqrt) \
             )",
             odd_only_results_table);
         let expect_str = format!("Failed to create table '{}'",odd_only_results_table);
@@ -129,30 +170,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect(&expect_str);
     }
 
+    let mut transaction = pool.begin().await?;
+    let mut trans_ct = 0;
     // s:u64 represents the equal start_of_sequence and difference (increment)
     for s in start_of_loop..end_of_loop {
-        let sigma2_mod_100:u64 = sigma_2(s);
+        let sigma2_str = sigma_2(s);
         let sqrt = (s*s) + (s+s)*(s+s);
-        println!("{sqrt} ==> {s}:{s} (sigma_2 mod 100: {sigma2_mod_100})");
+        println!("{sqrt} ==> {s}:{s} (sigma_2 : {sigma2_str})");
 
-        let qry_str = format!(
-            "INSERT INTO {} (sqrt, sigma2mod100) VALUES (?,?) \
-             ON DUPLICATE KEY UPDATE sigma2mod100 = sigma2mod100",
+        trans_ct += 1;
+        if trans_ct % 500 == 0 {
+            transaction.commit().await?;
+            transaction = pool.begin().await?;
+        }
+        let insert_str = format!(
+            "INSERT INTO {} (sqrt, sigma2) VALUES ($1,$2) \
+             ON CONFLICT (sqrt) DO NOTHING",
             odd_only_results_table);
         let expect_str = format!("Insert failed for {}",odd_only_results_table);
-        sqlx::query(&qry_str)
+        sqlx::query(&insert_str)
             .bind(sqrt)
-            .bind(sigma2_mod_100)
+            .bind(sigma2_str.clone())
             .execute(&pool)
             .await
             .expect(&expect_str);
 
-        let qry_str = format!(
-            "INSERT INTO {} (sqrt, sequenceStart, increment) VALUES(?,?,?) \
-             ON DUPLICATE KEY UPDATE increment = increment",
+        let insert_str = format!(
+            "INSERT INTO {} (sqrt, sequenceStart, increment) VALUES($1,$2,$3) \
+             ON CONFLICT (sqrt, sequenceStart) DO NOTHING",
             pairs_table);
         let expect_str = format!("Failed insert for {} table",pairs_table);
-        sqlx::query(&qry_str)
+        sqlx::query(&insert_str)
             .bind(sqrt)
             .bind(s)
             .bind(s)
@@ -163,31 +211,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // find all pairs (sequenceStart "s"/increment "i") 
         // where (s*i) + (s+i)(s+i) generates the current sqrt value.
          
-        get_pairs(s, sqrt, &pool, sigma2_mod_100, &pairs_table).await;
+        get_pairs(s, sqrt, &pool, &sigma2_str, &pairs_table).await;
 
         if s%250 == 0 {
             println!("{s}");
         };
     }
+    transaction.commit().await?;
     Ok(())
 }
 
-/// max value for num as a 64 bit integer is 65500 (or so). After that
+//// max value for num as a 64 bit integer is 65500 (or so). After that
 /// sigma2%100 will generate incorrect results (overflow)
-fn sigma_2(num:u64) -> u64 {
-    let num_2 = num * num;
+/// Note: The reason u64 is not returned is that sqlx:: does not support u64
+///     variables (9 Nov 20)
+fn sigma_2(num:i64) -> String {
+    let num64 = num as u64;
+    let num_2: u64 = num64 * num64;
     let mut sum_of_squares:u64 = 0;
-    for d in 1..num+1 {
+    for d in 1..(num64 + 1) {
         if num_2 % d == 0 {
-            sum_of_squares += (d*d)%100;
+            sum_of_squares += d*d;
             let flr = num_2 / d;
             //println!("num_2:{num_2}  d:{d}  flr:{flr}");
             if d != flr {
-                sum_of_squares += (flr*flr)%100;
+                sum_of_squares += flr*flr;
             }
         }
     }
-    sum_of_squares % 100
+    sum_of_squares.to_string()
 }
 
 /// async get_pairs()
@@ -198,27 +250,29 @@ fn sigma_2(num:u64) -> u64 {
 /// Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
 ///       been proved that this number is correct for all n, but has been tested up to n=65505.  
 /// args:
-///   n:u64         the previously processed value where sequenceStart = increment = n
-///   sqrt:u64      √f(n,n), the square root i.e. (n*n) + (n*n)² 
-///   pool:&MySqlPool
+///   n:i64         the previously processed value where sequenceStart = increment = n
+///   sqrt:i64      √f(n,n), the square root i.e. (n*n) + (n*n)² 
+///   pool:&sqlx::PgPool
 ///                 The sqlx connection for INSERTS
-///   sigma2mod10:u64 sigma2mod100 modulo 10. For sigma2mod10 == 3 or 9, get_pairs() will stop
+///   sigma2:&String sigma2. For sigma2 values ending in 3 or 9, get_pairs() will stop
 ///                 searching for f(n,k) pairs that generate the passed sqrt.
 ///   pairs_table:&String
 ///                 The table name of the pairs table in the connected database. Passed into
 ///                 main() via the JSON parameters file.
 /// results:        Returns no value
 ///   
-async fn get_pairs(n: u64, sqrt: u64, pool: &MySqlPool, sigma2mod10: u64, pairs_table: &str) {
-    let mut upper_k2:u64 = (2.25*n as f32) as u64;
-    let lower_k2:u64 = n+1;
+async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_str: &String, pairs_table: &str) {
+    let mut upper_k2:i64 = (2.25*n as f32) as i64;
+    let lower_k2:i64 = n+1;
+    println!("getting pairs...");
     let mut found_count:u64 = 1;  // the row inserted before this subroutine was called
     for n2 in 1..n {
         for k2 in (lower_k2..upper_k2).rev() {
             if sqrt == (n2*k2) + (n2+k2)*(n2+k2) {
+                println!("...{}:{} & {}:{}",n2,k2,k2,n2);
                 let qry_str = format!(
-                    "INSERT INTO {} (sqrt, sequenceStart, increment) VALUES(?,?,?) \
-                    ON DUPLICATE KEY UPDATE increment = increment",
+                    "INSERT INTO {} (sqrt, sequenceStart, increment) VALUES($1,$2,$3) \
+                    ON CONFLICT (sqrt, sequenceStart) DO NOTHING",
                     pairs_table);
                 let expect_str = format!("Failed insert for {} table in get_pairs() function.",pairs_table);
                 sqlx::query(&qry_str)
@@ -239,9 +293,9 @@ async fn get_pairs(n: u64, sqrt: u64, pool: &MySqlPool, sigma2mod10: u64, pairs_
                 found_count += 2;
                 break;                              
             }
-
-            if sigma2mod10 == 3 || sigma2mod10 == 9 {
-                if found_count == sigma2mod10 {
+            let test_num = sigma2_str.parse::<u64>().unwrap() % 10;
+            if test_num == 3 || test_num  == 9 {
+                if found_count == test_num {
                     break;
                 }
             }
