@@ -210,8 +210,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         // find all pairs (sequenceStart "s"/increment "i") 
         // where (s*i) + (s+i)(s+i) generates the current sqrt value.
+        let sigma2_num = sigma2_str.parse::<u64>().unwrap() % 10;
          
-        get_pairs(s, sqrt, &pool, &sigma2_str, &pairs_table).await;
+        get_pairs(s, sqrt, &pool, sigma2_num, &pairs_table).await;
 
         if s%250 == 0 {
             println!("{s}");
@@ -261,7 +262,7 @@ fn sigma_2(num:i64) -> String {
 ///                 main() via the JSON parameters file.
 /// results:        Returns no value
 ///   
-async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_str: &String, pairs_table: &str) {
+async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pairs_table: &str) {
     let mut upper_k2:i64 = (2.25*n as f32) as i64;
     let lower_k2:i64 = n+1;
     println!("getting pairs...");
@@ -293,9 +294,8 @@ async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_str: &String, 
                 found_count += 2;
                 break;                              
             }
-            let test_num = sigma2_str.parse::<u64>().unwrap() % 10;
-            if test_num == 3 || test_num  == 9 {
-                if found_count == test_num {
+            if sigma2_num == 3 || sigma2_num  == 9 {
+                if found_count == sigma2_num {
                     break;
                 }
             }
