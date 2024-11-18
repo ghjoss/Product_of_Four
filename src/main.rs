@@ -248,8 +248,6 @@ fn sigma_2(num:i64) -> String {
 /// loop in reverse through all values starting at k2=n*2.25. for all (n2*k2) + (n2+k2)² that
 /// match the passed sqrt, insert two rows into the pairs table. One for sequenceStart=n2, increment=k2
 /// and one for sequenceStart=k2, increment=n2.
-/// Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
-///       been proved that this number is correct for all n, but has been tested up to n=65505.  
 /// args:
 ///   n:i64         the previously processed value where sequenceStart = increment = n
 ///   sqrt:i64      √f(n,n), the square root i.e. (n*n) + (n*n)² 
@@ -263,7 +261,11 @@ fn sigma_2(num:i64) -> String {
 /// results:        Returns no value
 ///   
 async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pairs_table: &str) {
-    let mut upper_k2:i64 = (2.25*n as f32) as i64;
+// Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
+//       been proved that this number is correct for all n, but has been tested up to n=65505.
+// Note2: See comments at the end of the program where there is an SQL query to validate
+//        this number.
+    let mut upper_k2:i64 = (2.24*n as f32) as i64;
     let lower_k2:i64 = n+1;
     println!("getting pairs...");
     let mut found_count:u64 = 1;  // the row inserted before this subroutine was called
@@ -330,4 +332,38 @@ Notes:
    = n⁴ + 3*k*n³ + n²*k² + 3*k*n³ + 9*k²*n² + 3*k³*n + k²+n²  + 3*k³*n            + k⁴
    = n⁴ + (3*k*n³ + 3*k*n³) +        (n²*k² + 9*k²*n² +n²*k²) + (3*k³*n + 3*k³*n) + k⁴
    = n⁴    + 6*k*n³                 + 11*k²*n²                + 6*k³*n            + k⁴ 
+
+Note for how the muliplier in get_pairs was validated. 
+  After creating rows in the pairs table for startSequence/increment equal pairs from
+  1-65505, the SQL query below was used to calculate the ratio of the highest sequenceStart
+  to the second highest sequenceStart. The highest ratio between those two columns was 
+  2.2354262487966627: 
+
+-- having built a table of pairs values calculate highest (max) sequenceStart and next highest
+-- sequence start. Then divide the max by next highest. This will give a ratio that should show
+-- the muliplier to use in the productoffour get_pairs() function.
+		WITH RankedData AS (
+			SELECT
+				sqrt,
+				sequenceStart,
+				RANK() OVER (PARTITION BY sqrt ORDER BY sequenceStart DESC) AS rank_within_group
+			FROM pairs
+		)
+		select rd2.sqrt, max_1, max_2, quotient,right(sigma2,1) 
+		from 
+			(select   RankedData.sqrt,
+			MAX(CASE WHEN rank_within_group = 1 THEN sequenceStart END) AS max_1,
+			MAX(CASE WHEN rank_within_group = 2 THEN sequenceStart END) AS max_2,
+			MAX(CASE WHEN rank_within_group = 1 THEN cast(sequenceStart as numeric) END) 
+				/ MAX(CASE WHEN rank_within_group = 2 THEN cast(sequenceStart as numeric) END) AS quotient
+			FROM RankedData
+			WHERE rank_within_group <= 2
+			GROUP BY RankedData.sqrt) as rd2
+		join oddonlyresults o 
+		on rd2.sqrt = o.sqrt
+		group by rd2.sqrt,max_1,max_2,quotient,sigma2
+		having quotient notnull 
+		ORDER BY quotient desc
+		;
 */
+
