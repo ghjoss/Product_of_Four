@@ -41,7 +41,7 @@ use serde_json;
 
 /// main()
 /// process the JSON file Product_of_Four.json which has program control parameters. Display those
-/// parameters and then connect to the mysql database Pof4. The credentials for this connect are
+/// parameters and then connect to the postgre database Pof4. The credentials for this connect are
 /// in the JSON file value "connection_string".
 /// 
 /// If the JSON file indicates that the database tables are to be scratched and created anew
