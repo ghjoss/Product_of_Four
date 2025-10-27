@@ -1,9 +1,9 @@
-{
+0{
     "_1":"This is a template file, replace fields as needed",
     "_2":"to connect to the database",
     "_2a":"start and end of main loop",
-    "start":1,
-    "end":55101,
+    "start":55763,
+    "end":125000,
     "_3":"--------------------------------",
     "_4":"Table names",
     "oddOnlyResults_table":"oddOnlyResults",

@@ -24,7 +24,7 @@ use serde_json;
 /// In general for initial value n and increment (difference) k, √f(n,k) = (n*k + (n+k)²).
 /// 
 /// Thus √f(3,4) (61 in the above example) can be computed by the
-/// formula: (3*4) * (3+4)² = 12 + 7² = 12 + 49 = 61
+/// formula: (3*4) + (3+4)² = 12 + 7² = 12 + 49 = 61
 ///
 /// By associativity, f(n,k) = f(k,n), because both have the same square root. Thus,
 /// for n ≠ k, there are at least two n,k :: k,n pairs that have the same root. There
@@ -146,7 +146,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "CREATE TABLE {} ( \
                     sqrt BIGINT NOT NULL, \
                     sequenceStart BIGINT NOT NULL, \
-                    increment INT UNSIGNED DEFAULT NULL, \
+                    increment BIGINT DEFAULT NULL, \
                     CONSTRAINT pairs_pk PRIMARY KEY (sqrt,sequenceStart) \
             )",
             pairs_table);
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let qry_str = format!(
             "CREATE TABLE {} ( \
-                    sqrt BIGINT UNSIGNED NOT NULL, \
+                    sqrt BIGINT NOT NULL, \
                     sigma2 VARCHAR(75) DEFAULT NULL, \
                     CONSTRAINT oddonlyresults_pk PRIMARY KEY (sqrt) \
             )",
@@ -174,8 +174,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut trans_ct = 0;
     // s:u64 represents the equal start_of_sequence and difference (increment)
     for s in start_of_loop..end_of_loop {
-        let sigma2_str = sigma_2(s);
-        let sqrt = (s*s) + (s+s)*(s+s);
+        // sigma_2 now returns (string, last_digit)
+        let (sigma2_str, sigma2_last_digit) = sigma_2(s);
+        // compute sqrt safely in i128 (sqrt = (s*s) + (s+s)*(s+s) == 5*s*s)
+        let s_i128 = s as i128;
+        let sqrt_i128 = 5i128 * s_i128 * s_i128;
+        if sqrt_i128 > i128::from(i64::MAX) {
+            eprintln!("sqrt overflow for s={} (value {}) - skipping", s, sqrt_i128);
+            continue;
+        }
+        let sqrt = sqrt_i128 as i64;
         println!("{sqrt} ==> {s}:{s} (sigma_2 : {sigma2_str})");
 
         trans_ct += 1;
@@ -210,37 +218,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         // find all pairs (sequenceStart "s"/increment "i") 
         // where (s*i) + (s+i)(s+i) generates the current sqrt value.
-        let sigma2_num = sigma2_str.parse::<u64>().unwrap() % 10;
+        let sigma2_num = sigma2_last_digit as u64;
          
         get_pairs(s, sqrt, &pool, sigma2_num, &pairs_table).await;
 
-        if s%250 == 0 {
+    if s%250 == 0 {
             println!("{s}");
         };
     }
+
+    // commit any remaining work and finish main
     transaction.commit().await?;
     Ok(())
 }
 
-//// max value for num as a 64 bit integer is 65500 (or so). After that
-/// sigma2%100 will generate incorrect results (overflow)
-/// Note: The reason u64 is not returned is that sqlx:: does not support u64
-///     variables (9 Nov 20)
-fn sigma_2(num:i64) -> String {
-    let num64 = num as u64;
-    let num_2: u64 = num64 * num64;
-    let mut sum_of_squares:u64 = 0;
-    for d in 1..(num64 + 1) {
-        if num_2 % d == 0 {
-            sum_of_squares += d*d;
-            let flr = num_2 / d;
+fn sigma_2(num: i64) -> (String, u8) {
+    // use u128 to avoid overflow on intermediate squares and sums; use saturating_add
+    // to protect against unlikely u128 overflow, and also return the last digit to avoid
+    // parsing huge strings back into numeric types.
+    let num128 = num as u128;
+    let num_2: u128 = num128 * num128;
+    let mut sum_of_squares: u128 = 0;
+    for d in 1..(num128 + 1) {
+        let d_u128 = d as u128;
+        if num_2 % d_u128 == 0 {
+            sum_of_squares = sum_of_squares.saturating_add(d_u128 * d_u128);
+            let flr = num_2 / d_u128;
             //println!("num_2:{num_2}  d:{d}  flr:{flr}");
-            if d != flr {
-                sum_of_squares += flr*flr;
+            if d_u128 != flr {
+                sum_of_squares = sum_of_squares.saturating_add(flr * flr);
             }
         }
     }
-    sum_of_squares.to_string()
+    let last_digit = (sum_of_squares % 10) as u8;
+    (sum_of_squares.to_string(), last_digit)
 }
 
 /// async get_pairs()
