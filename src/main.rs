@@ -78,7 +78,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let db_port: &str = v["db_port"].as_str().unwrap();
     let db_ip_address: &str = v["db_ip_address"].as_str().unwrap();
     let db_name: &str = v["db_name"].as_str().unwrap();
-    
+    let install_dual_pairs = v["install_dual_pairs"].as_bool().unwrap();
+    let pairs_table_columns: Vec<&str> = v["pairs_table_columns"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+
     let read_credentials_at_runtime = v["read_credentials_at_runtime"].as_bool().unwrap();
     let mut user = String::from("");
     let mut pwd = String::from("");
@@ -144,12 +146,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let qry_str = format!(
             "CREATE TABLE {} ( \
-                    sqrt BIGINT NOT NULL, \
-                    sequenceStart BIGINT NOT NULL, \
-                    increment BIGINT DEFAULT NULL, \
-                    CONSTRAINT pairs_pk PRIMARY KEY (sqrt,sequenceStart) \
+                    {} BIGINT NOT NULL, \
+                    {} BIGINT NOT NULL, \
+                    {} BIGINT DEFAULT NULL, \
+                    CONSTRAINT pairs_pk PRIMARY KEY ({},{}) \
             )",
-            pairs_table);
+            pairs_table,pairs_table_columns[0],pairs_table_columns[1],pairs_table_columns[2],
+            pairs_table_columns[0],pairs_table_columns[1]
+        );
         let expect_str = format!("Failed to create table '{}'",pairs_table);
         sqlx::query(&qry_str)
             .execute(&pool)
@@ -204,9 +208,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect(&expect_str);
 
         let insert_str = format!(
-            "INSERT INTO {} (sqrt, sequenceStart, increment) VALUES($1,$2,$3) \
-             ON CONFLICT (sqrt, sequenceStart) DO NOTHING",
-            pairs_table);
+            "INSERT INTO {} ({}, {}, {}) VALUES($1,$2,$3) \
+             ON CONFLICT ({}, {}) DO NOTHING",
+            pairs_table,
+            pairs_table_columns[0],
+            pairs_table_columns[1],
+            pairs_table_columns[2],
+            pairs_table_columns[0],
+            pairs_table_columns[1]);
         let expect_str = format!("Failed insert for {} table",pairs_table);
         sqlx::query(&insert_str)
             .bind(sqrt)
@@ -220,7 +229,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // where (s*i) + (s+i)(s+i) generates the current sqrt value.
         let sigma2_num = sigma2_last_digit as u64;
          
-        get_pairs(s, sqrt, &pool, sigma2_num, &pairs_table).await;
+        get_pairs(s, sqrt, &pool, sigma2_num, &pairs_table, &pairs_table_columns, install_dual_pairs).await;
 
     if s%250 == 0 {
             println!("{s}");
@@ -269,9 +278,12 @@ fn sigma_2(num: i64) -> (String, u8) {
 ///   pairs_table:&String
 ///                 The table name of the pairs table in the connected database. Passed into
 ///                 main() via the JSON parameters file.
+///   pairs_table_columns:&Vec<&str>
 /// results:        Returns no value
+/// 
 ///   
-async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pairs_table: &str) {
+async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pairs_table: &str, 
+    pairs_table_columns: &Vec<&str>,install_dual_pairs: bool) {
 // Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
 //       been proved that this number is correct for all n, but has been tested up to n=65505.
 // Note2: See comments at the end of the program where there is an SQL query to validate
@@ -285,9 +297,14 @@ async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pair
             if sqrt == (n2*k2) + (n2+k2)*(n2+k2) {
                 println!("...{}:{} & {}:{}",n2,k2,k2,n2);
                 let qry_str = format!(
-                    "INSERT INTO {} (sqrt, sequenceStart, increment) VALUES($1,$2,$3) \
-                    ON CONFLICT (sqrt, sequenceStart) DO NOTHING",
-                    pairs_table);
+                    "INSERT INTO {} ({}, {}, {}) VALUES($1,$2,$3) \
+                    ON CONFLICT ({},{}) DO NOTHING",
+                    pairs_table,
+                    pairs_table_columns[0],
+                    pairs_table_columns[1],
+                    pairs_table_columns[2],
+                    pairs_table_columns[0],
+                    pairs_table_columns[1]);
                 let expect_str = format!("Failed insert for {} table in get_pairs() function.",pairs_table);
                 sqlx::query(&qry_str)
                     .bind(sqrt)
@@ -296,13 +313,15 @@ async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pair
                     .execute(pool)
                     .await
                     .expect(&expect_str);
-                sqlx::query(&qry_str)
-                    .bind(sqrt)
-                    .bind(k2)
-                    .bind(n2)
+                if install_dual_pairs {
+                    sqlx::query(&qry_str)
+                        .bind(sqrt)
+                        .bind(k2)
+                        .bind(n2)
                     .execute(pool)
                     .await
                     .expect(&expect_str);
+                }
                 upper_k2 = k2-1; // no other upper values >= k2 will work with the increasing n2 values
                 found_count += 2;
                 break;                              
