@@ -3,6 +3,7 @@
 # sigma_2(m) = sum of d^2 for all positive divisors d of m
 
 import math
+import sys
 
 def sigma_2_of_square(n: int) -> int:
     """
@@ -44,7 +45,6 @@ def sigma_2_of_square(n: int) -> int:
 
 # Simple CLI usage
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) >= 2:
         try:
             n = int(sys.argv[1])
