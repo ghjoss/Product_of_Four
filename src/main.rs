@@ -2,10 +2,12 @@ use sqlx::{PgPool};
 use std::error::Error;
 use std::env::{self};
 use std::fs;
+use std::str::FromStr;
 use tokio;
 use tokio::io::{self,stdin, AsyncBufReadExt};
 use std::process;
 use serde_json;
+use bigdecimal::BigDecimal;
 
 //use futures::stream::StreamExt;
 
@@ -21,7 +23,7 @@ use serde_json;
 /// See the On-line Encyclopedia of Integer Sequences (OEIS) article #A062938 
 /// (https://oeis.org/A062938). This sequence, generalized for all differences (not only inc=1), 
 /// is used in the code below to evaluate the square roots without having to use the sqrt() function.
-/// In general for initial value n and increment (difference) k, √f(n,k) = (n*k + (n+k)²).
+/// In general for innow returns (string, last_digit)itial value n and increment (difference) k, √f(n,k) = (n*k + (n+k)²).
 /// 
 /// Thus √f(3,4) (61 in the above example) can be computed by the
 /// formula: (3*4) + (3+4)² = 12 + 7² = 12 + 49 = 61
@@ -163,7 +165,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let qry_str = format!(
             "CREATE TABLE {} ( \
                     sqrt BIGINT NOT NULL, \
-                    sigma2 VARCHAR(75) DEFAULT NULL, \
+                    sigma2 NUMERIC DEFAULT NULL, \
+                    sigma2Mod10 SMALLINT GENERATED ALWAYS AS (mod(sigma2,10)) STORED, \
+                    sigma2Mod100 SMALLINT GENERATED ALWAYS AS (mod(sigma2,100)) STORED, \
                     CONSTRAINT oddonlyresults_pk PRIMARY KEY (sqrt) \
             )",
             odd_only_results_table);
@@ -178,9 +182,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut trans_ct = 0;
     // s:u64 represents the equal start_of_sequence and difference (increment)
     for s in start_of_loop..end_of_loop {
-        // sigma_2 now returns (string, last_digit)
-        let (sigma2_str, sigma2_last_digit) = sigma_2(s);
-        // compute sqrt safely in i128 (sqrt = (s*s) + (s+s)*(s+s) == 5*s*s)
+        // sigma_2 returns u128 to avoid overflow
+        let sigma2_num:u128 = sigma_2(s);
+        // New: Add .expect() to handle the Result
+        let bd_sigma2 = BigDecimal::from_str(&sigma2_num.to_string()).expect("Failed to parse BigDecimal"); // compute sqrt safely in i128 (sqrt = (s*s) + (s+s)*(s+s) == 5*s*s)
         let s_i128 = s as i128;
         let sqrt_i128 = 5i128 * s_i128 * s_i128;
         if sqrt_i128 > i128::from(i64::MAX) {
@@ -188,7 +193,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
         let sqrt = sqrt_i128 as i64;
-        println!("{sqrt} ==> {s}:{s} (sigma_2 : {sigma2_str})");
+        println!("{sqrt} ==> {s}:{s} (sigma_2 : {sigma2_num})");
 
         trans_ct += 1;
         if trans_ct % 500 == 0 {
@@ -202,8 +207,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let expect_str = format!("Insert failed for {}",odd_only_results_table);
         sqlx::query(&insert_str)
             .bind(sqrt)
-            .bind(sigma2_str.clone())
-            .execute(&pool)
+            .bind(bd_sigma2)
+            .execute(&mut *transaction)
             .await
             .expect(&expect_str);
 
@@ -221,13 +226,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .bind(sqrt)
             .bind(s)
             .bind(s)
-            .execute(&pool)
+            .execute(&mut *transaction)
             .await
             .expect(&expect_str);
 
         // find all pairs (sequenceStart "s"/increment "i") 
         // where (s*i) + (s+i)(s+i) generates the current sqrt value.
-        let sigma2_num = sigma2_last_digit as u64;
+        //let sigma2_num = sigma2_last_digit as u64;
          
         get_pairs(s, sqrt, &pool, sigma2_num, &pairs_table, &pairs_table_columns, install_dual_pairs).await;
 
@@ -241,7 +246,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn sigma_2(num: i64) -> (String, u8) {
+fn sigma_2(num: i64) -> u128 {
     // use u128 to avoid overflow on intermediate squares and sums; use saturating_add
     // to protect against unlikely u128 overflow, and also return the last digit to avoid
     // parsing huge strings back into numeric types.
@@ -259,8 +264,7 @@ fn sigma_2(num: i64) -> (String, u8) {
             }
         }
     }
-    let last_digit = (sum_of_squares % 10) as u8;
-    (sum_of_squares.to_string(), last_digit)
+    sum_of_squares
 }
 
 /// async get_pairs()
@@ -282,7 +286,7 @@ fn sigma_2(num: i64) -> (String, u8) {
 /// results:        Returns no value
 /// 
 ///   
-async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pairs_table: &str, 
+async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u128, pairs_table: &str, 
     pairs_table_columns: &Vec<&str>,install_dual_pairs: bool) {
 // Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
 //       been proved that this number is correct for all n, but has been tested up to n=65505.
@@ -291,7 +295,7 @@ async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u64, pair
     let mut upper_k2:i64 = (2.24*n as f32) as i64;
     let lower_k2:i64 = n+1;
     println!("getting pairs...");
-    let mut found_count:u64 = 1;  // the row inserted before this subroutine was called
+    let mut found_count:u128 = 1;  // the row inserted before this subroutine was called
     for n2 in 1..n {
         for k2 in (lower_k2..upper_k2).rev() {
             if sqrt == (n2*k2) + (n2+k2)*(n2+k2) {
