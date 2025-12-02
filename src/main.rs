@@ -3,14 +3,13 @@ use std::error::Error;
 use std::env::{self};
 use std::fs;
 use std::str::FromStr;
-use tokio;
-use tokio::io::{self,stdin, AsyncBufReadExt};
 use std::process;
+use tokio;
+use tokio::io::{self, stdin, AsyncBufReadExt, BufReader};
 use serde_json;
 use bigdecimal::BigDecimal;
-
-//use futures::stream::StreamExt;
-
+use num_bigint::{BigUint,ToBigInt};
+use num_traits::{One};
   
 ///	The product of four integers in an arithmetic progression of four integers when 
 ///	added to the difference value raised to the fourth power is always a squared integer
@@ -126,6 +125,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     \tpairs table name: {}\n\n",
     db_ip_address,db_port,db_name,odd_only_results_table,pairs_table);
 
+// Read in table of primes
+    let file_name = "_100KPrimes.txt";
+    let primes_file_path = current_dir.join(file_name);
+    println!("Reading {}",primes_file_path.display());
+    let primes: Vec<u64> = match parse_file_to_vector(file_name).await {
+        Ok(mut p) => {
+            p.sort();
+            p
+        }
+        Err(e) => {
+            eprintln!("Error reading file: {}", e);
+            // Decide if we should exit here or return an error
+            return Err(Box::new(e) as Box<dyn Error>); 
+        }
+    };
+
     let connection_string = format!("postgres://{}:{}@{}:{}/{}",user,pwd,db_ip_address,db_port,db_name);
     // let pool = sqlx::postgres::PgPool::connect(connection_string).await?;
     let pool = PgPool::connect(&connection_string).await?;
@@ -181,12 +196,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut transaction = pool.begin().await?;
     let mut trans_ct = 0;
     // s:u64 represents the equal start_of_sequence and difference (increment)
-    for s in start_of_loop..end_of_loop {
+    for s_i64 in start_of_loop..end_of_loop {
         // sigma_2 returns u128 to avoid overflow
-        let sigma2_num:u128 = sigma_2(s);
+        let s:u64 = s_i64 as u64;
+        let sigma2_num:u128 = sigma_2_dirichlet(s, &primes).await?;
         // New: Add .expect() to handle the Result
         let bd_sigma2 = BigDecimal::from_str(&sigma2_num.to_string()).expect("Failed to parse BigDecimal"); // compute sqrt safely in i128 (sqrt = (s*s) + (s+s)*(s+s) == 5*s*s)
-        let s_i128 = s as i128;
+        let s_i128 = s_i64 as i128;
         let sqrt_i128 = 5i128 * s_i128 * s_i128;
         if sqrt_i128 > i128::from(i64::MAX) {
             eprintln!("sqrt overflow for s={} (value {}) - skipping", s, sqrt_i128);
@@ -224,8 +240,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let expect_str = format!("Failed insert for {} table",pairs_table);
         sqlx::query(&insert_str)
             .bind(sqrt)
-            .bind(s)
-            .bind(s)
+            .bind(s_i64)
+            .bind(s_i64)
             .execute(&mut *transaction)
             .await
             .expect(&expect_str);
@@ -234,7 +250,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // where (s*i) + (s+i)(s+i) generates the current sqrt value.
         //let sigma2_num = sigma2_last_digit as u64;
          
-        get_pairs(s, sqrt, &pool, sigma2_num, &pairs_table, &pairs_table_columns, install_dual_pairs).await;
+        get_pairs(s_i64, sqrt, &pool, sigma2_num, &pairs_table, &pairs_table_columns, install_dual_pairs).await?;
 
     if s%250 == 0 {
             println!("{s}");
@@ -246,6 +262,128 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// parse_file_to_vector: used to read the file of comma-separated
+/// prime numbers.
+/// arg: filename: the name of the file to read
+/// result: a vector of the integers (prime numbers) in the file.
+async fn parse_file_to_vector(filename: &str) -> Result<Vec<u64>, io::Error> {
+    let mut numbers: Vec<u64> = Vec::new();
+
+    // Open the file asynchronously
+    let file = tokio::fs::File::open(filename).await?;
+    let reader = BufReader::new(file);
+
+    // Iterate over each line in the file
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        // Split the line by commas and parse each value as an integer
+        for num_str in line.split(',') {
+            if let Ok(num) = num_str.trim().parse::<u64>() {
+                numbers.push(num); // Add the parsed number to the vector
+            }
+        }
+    }
+
+    Ok(numbers)
+}
+/// prime_factors:
+/// determine the prime factors of a specified number
+/// args:
+/// num: the number to factor
+/// prime_set: a hash set of the first 100,000 (or so) prime numbers
+/// primes: the first 100,000 (or so) prime numbers in order from lowest (2) to highest 
+/// result:
+/// a vector of the prime factors of num.
+async fn prime_factors(num: u64, primes: &[u64]) -> Result<Vec<u64>, Box<dyn Error>> {
+    let mut factors: Vec<u64> = Vec::new();
+    let mut n = num;
+
+    for &p in primes.iter() {
+        if p * p > n { // Optimization: Stop checking when p exceeds the square root of the remaining n
+            break;
+        }
+
+        while n % p == 0 {
+            factors.push(p);
+            n /= p;
+        }
+    }
+
+    if n > 1 {
+        // The remaining value is a prime factor itself
+        factors.push(n);
+    }
+
+    Ok(factors)
+}
+// Note: This removes the need for prime_set, simplifying the function signature and setup.
+
+/// group_factors
+/// with a vector of all of the prime factors of a number as input, group the duplicate
+/// factors into a vector of tuples. e.g. for vector [2,2,5,5,5,17] group these as [(2,2),(5,3),(17,1)]
+/// args: all_factors - the vector of prime factors
+/// result: the vector of tuples as noted above.
+async fn group_factors(all_factors:Vec<u64>) -> Result<Vec<(u64,u16)>, Box<dyn Error>> {
+    let mut grouped_factors:Vec<(u64,u16)> = Vec::new();
+    let mut current_factor:u64 = all_factors[0];
+    let mut factor_count:u16 = 1;
+    for f in 1..all_factors.len() {
+        if all_factors[f] == current_factor {
+            factor_count += 1;
+        }
+        else {
+            grouped_factors.push((current_factor,factor_count));
+            factor_count = 1;
+            current_factor = all_factors[f];
+        }
+    }
+    grouped_factors.push((current_factor,factor_count));
+    // for (a, b) in &grouped_factors {
+    //     println!("({:?}, {:?})", a, b);
+    // }
+    Ok(grouped_factors)
+}
+async fn sigma_2_dirichlet(n: u64, primes: &[u64]) -> Result<u128, Box<dyn Error>> {
+    // 1. Get flat list of factors for n
+    let vec_result = prime_factors(n, primes).await?;
+    
+    // Handle the case where n=1 or no factors are found (should not happen if n > 1)
+    if vec_result.is_empty() {
+        return Ok(1); // sigma_2(1) = 1
+    }
+    
+    // 2. Group factors of n: [(p1, a1), (p2, a2), ...]
+    let factor_groups = group_factors(vec_result).await?;
+
+    let mut result = BigUint::one();
+
+    for (p, a) in factor_groups {
+        let p_big = p.to_bigint().unwrap().to_biguint().unwrap();
+        let a_u32 = a as u32;
+
+        // Exponent in n^2 is e_i = 2 * a_i
+        // Exponent for the formula numerator is 2 * (e_i + 1) = 2 * (2*a + 1)
+        let numerator_exponent: u32 = 2 * (2 * a_u32 + 1);
+        
+        // Numerator: p^(2*(2a+1)) - 1
+        let numerator = p_big.pow(numerator_exponent) - BigUint::one();
+        
+        // Denominator: p^2 - 1
+        let denominator = p_big.pow(2) - BigUint::one();
+        
+        // Term = Numerator / Denominator
+        let term = numerator / denominator; 
+        
+        result *= term;
+    }
+
+    // Convert the final BigUint result back to u128 (assuming it fits)
+    Ok(result.try_into().unwrap_or_else(|_| {
+        // Handle overflow if the number is > u128::MAX
+        eprintln!("Sigma2 result overflowed u128 for n={}. Truncating.", n);
+        u128::MAX
+    }))
+}
 fn sigma_2(num: i64) -> u128 {
     // use u128 to avoid overflow on intermediate squares and sums; use saturating_add
     // to protect against unlikely u128 overflow, and also return the last digit to avoid
@@ -267,7 +405,7 @@ fn sigma_2(num: i64) -> u128 {
     sum_of_squares
 }
 
-/// async get_pairs()
+/// async get_pairs_old()
 /// Loop through all values (n2) less then the passed number n (see args). Within that loop
 /// loop in reverse through all values starting at k2=n*2.25. for all (n2*k2) + (n2+k2)² that
 /// match the passed sqrt, insert two rows into the pairs table. One for sequenceStart=n2, increment=k2
@@ -286,7 +424,7 @@ fn sigma_2(num: i64) -> u128 {
 /// results:        Returns no value
 /// 
 ///   
-async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u128, pairs_table: &str, 
+async fn get_pairs_old(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u128, pairs_table: &str, 
     pairs_table_columns: &Vec<&str>,install_dual_pairs: bool) {
 // Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
 //       been proved that this number is correct for all n, but has been tested up to n=65505.
@@ -339,6 +477,123 @@ async fn get_pairs(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u128, pai
     }
 }
 
+/// A helper function to check if a number is a perfect square and return its root.
+fn is_perfect_square(n: i128) -> Option<i128> {
+    if n < 0 {
+        return None;
+    }
+    // Calculate the integer square root
+    let root = (n as f64).sqrt().round() as i128;
+    // Check if squaring the integer root returns the original number
+    if root * root == n {
+        Some(root)
+    } else {
+        None
+    }
+}
+
+/// async get_pairs()
+/// Solves for k2 using the quadratic formula, eliminating the nested loop.
+/// This function is modified to return an error (using the '?') for clean error propagation.
+async fn get_pairs(
+    n: i64, 
+    sqrt: i64, 
+    pool: &PgPool, 
+    sigma2_num: u128, 
+    pairs_table: &str, 
+    pairs_table_columns: &Vec<&str>,
+    install_dual_pairs: bool
+) -> Result<(), Box<dyn Error>> { // Added Result<(), Box<dyn Error>> for safety
+    
+    println!("getting pairs (optimized)...");
+    
+    // Convert inputs to i128 for safe calculation
+    let sqrt_i128: i128 = sqrt.into();
+    let n_i128: i128 = n.into();
+
+    let mut found_count: u128 = 1; // n:n pair already inserted
+
+    // Only iterate up to n, searching for n2
+    for n2 in 1..n_i128 {
+        
+        // 1. Calculate the Discriminant (Value under the square root)
+        // Discriminant (Delta) = 5*n2^2 + 4*sqrt
+        let n2_i128 = n2.into();
+        let discriminant = 5 * n2_i128 * n2_i128 + 4 * sqrt_i128;
+
+        // 2. Check if the discriminant is a perfect square
+        if let Some(delta_root) = is_perfect_square(discriminant) {
+            
+            // 3. Calculate k2 using the positive root of the quadratic formula
+            // k2 = (-3*n2 + sqrt(Delta)) / 2
+            let numerator = -3 * n2_i128 + delta_root;
+            
+            // k2 must be positive and divisible by 2 for an integer solution
+            if numerator > 0 && numerator % 2 == 0 {
+                let k2_i128: i128 = numerator / 2;
+                
+                // 4. Validate k2 constraints (k2 must be greater than n2)
+                // The relationship f(n,k) = f(k,n) means we only need to find one.
+                // Since we iterate n2=1 up to n, we are looking for k2 > n2.
+                // The current code requires lower_k2 = n+1, meaning the found pairs 
+                // must have k2 > n. For simplicity and correctness with the algebraic formula, 
+                // we check k2 > n2.
+                
+                if k2_i128 > n2_i128 {
+                    // We found a pair (n2, k2_i128)
+                    let k2: i64 = k2_i128.try_into().unwrap_or(i64::MAX);
+                    let n2_i64: i64 = n2_i128.try_into().unwrap_or(i64::MAX);
+
+                    println!("...{}:{} & {}:{}", n2_i64, k2, k2, n2_i64);
+                    
+                    // --- Database Insertion ---
+                    // Note: You should wrap this in a transaction and use batching 
+                    // (P3 optimization) for better performance. 
+                    
+                    let qry_str = format!(
+                        "INSERT INTO {} ({}, {}, {}) VALUES($1,$2,$3) \
+                        ON CONFLICT ({},{}) DO NOTHING",
+                        pairs_table,
+                        pairs_table_columns[0],
+                        pairs_table_columns[1],
+                        pairs_table_columns[2],
+                        pairs_table_columns[0],
+                        pairs_table_columns[1]);
+                    
+                    // Insert (n2, k2)
+                    sqlx::query(&qry_str)
+                        .bind(sqrt)
+                        .bind(n2_i64)
+                        .bind(k2)
+                        .execute(pool)
+                        .await?; // Use '?' instead of .expect()
+                        
+                    if install_dual_pairs {
+                        // Insert (k2, n2)
+                        sqlx::query(&qry_str)
+                            .bind(sqrt)
+                            .bind(k2)
+                            .bind(n2_i64)
+                            .execute(pool)
+                            .await?; // Use '?' instead of .expect()
+                    }
+                    
+                    found_count += 2;
+                    
+                    // 5. Early Exit Logic
+                    if sigma2_num == 3 || sigma2_num == 9 {
+                        if found_count >= sigma2_num {
+                            // Stop searching for this specific sqrt if the target count is reached
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(())
+}
 /*
 Notes:
  

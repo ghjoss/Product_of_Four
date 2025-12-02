@@ -1,24 +1,25 @@
 0{
-    "_1":"This is a template file, replace fields as needed",
-    "_2":"to connect to the database",
-    "_2a":"start and end of main loop",
+    "_1":"This is a template file. Rename to ProductOfFour.json. ,
+    "_2 : replace fields as needed to connect to the database",
+    "_3",
+    "_4":"start and end of main loop",
     "start":55763,
     "end":125000,
-    "_3":"--------------------------------",
-    "_4":"Table names",
+    "_5":"--------------------------------",
+    "_6":"Table names",
     "oddOnlyResults_table":"oddOnlyResults",
-    "pairs_table":"pairs",
+    "pairs_table":"pairs2",
     "factors_table":"factors",
-    "_5":"Connection requirements",
-    "_6":"--------------------------------",
+    "_7":"Connection requirements",
+    "_8":"--------------------------------",
     "drop_and_create_tables":false,
     "db_port":"5432",
     "db_ip_address":"localhost",
     "db_name":"Pof4",
-    "_6.5 Credentials: (set read_credentials_at_runtime=false to specify username and password here.)"
+    "_9 Credentials: (set read_credentials_at_runtime=false to specify username and password here.)"
     "read_credentials_at_runtime":true,
     "username":"user",
     "password":"password",
-    "_7":"Note: program connection string uses format!()",
-    "_8":"format!('postgres://{}:{}@{}:{}/{}',username,password,db_ip_address,db_port,db_name);"
+    "_10":"Note: program connection string uses format!()",
+    "_11":"format!('postgres://{}:{}@{}:{}/{}',username,password,db_ip_address,db_port,db_name);"
 }
