@@ -23,6 +23,8 @@ CREATE TABLE productoffour.factors (
 	count int4 NOT NULL,
 	CONSTRAINT factors_pk PRIMARY KEY (sqrt, factor)
 );
+CREATE UNIQUE INDEX idx_factors_sqrt_factor_count 
+ON factors (sqrt, factor, count);
 
 
 -- productoffour.oddonlyresults definition
@@ -38,25 +40,8 @@ CREATE TABLE productoffour.oddonlyresults (
 	CONSTRAINT oddonlyresults_pk PRIMARY KEY (sqrt)
 );
 
-
--- productoffour.pairs definition
-
--- Drop table
-
--- DROP TABLE productoffour.pairs;
-
-CREATE TABLE productoffour.pairs (
-	sqrt int8 NOT NULL,
-	sequencestart int8 DEFAULT 0 NOT NULL,
-	"increment" int4 NULL,
-	CONSTRAINT pairs_pk PRIMARY KEY (sqrt, sequencestart)
-);
-
-
 -- productoffour.pairs2 definition
-
 -- Drop table
-
 -- DROP TABLE productoffour.pairs2;
 
 CREATE TABLE productoffour.pairs2 (
@@ -65,3 +50,11 @@ CREATE TABLE productoffour.pairs2 (
 	start_incr2 int8 NULL,
 	CONSTRAINT pairs_pk2 PRIMARY KEY (sqrt, start_incr1)
 );
+
+-- For the reverse symmetric pairs and the WHERE filter
+CREATE UNIQUE INDEX idx_pairs2_reverse_lookup 
+ON pairs2 (start_incr2, start_incr1, sqrt);
+
+CREATE UNIQUE INDEX idx_pairs2_lookup
+ON pairs2 (start_incr1, start_incr2);
+

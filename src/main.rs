@@ -1,16 +1,4 @@
-use sqlx::{PgPool};
-use std::error::Error;
-use std::env::{self};
-use std::fs;
-use std::str::FromStr;
-use std::process;
-use tokio;
-use tokio::io::{self, stdin, AsyncBufReadExt, BufReader};
-use serde_json;
-use bigdecimal::BigDecimal;
-use num_bigint::{BigUint,ToBigInt};
-use num_traits::{One};
-  
+
 ///	The product of four integers in an arithmetic progression of four integers when 
 ///	added to the difference value raised to the fourth power is always a squared integer
 ///	value. The function f(n,k) is defined as n * n+k * n+2k * n+3k + k⁴, where n is the
@@ -57,6 +45,19 @@ use num_traits::{One};
 /// 
 /// Args: program has no input arguments.
 /// Result: Ok or error.
+use sqlx::{PgPool};
+use std::error::Error;
+use std::env::{self};
+use std::fs;
+use std::str::FromStr;
+use std::process;
+use tokio;
+use tokio::io::{self, stdin, AsyncBufReadExt, BufReader};
+use serde_json;
+use bigdecimal::BigDecimal;
+use num_bigint::{BigUint,ToBigInt};
+use num_traits::{One};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // JSON file definition and reading
@@ -166,10 +167,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     {} BIGINT NOT NULL, \
                     {} BIGINT NOT NULL, \
                     {} BIGINT DEFAULT NULL, \
-                    CONSTRAINT pairs_pk PRIMARY KEY ({},{}) \
+                    CONSTRAINT {}_pk PRIMARY KEY ({},{}) \
             )",
             pairs_table,pairs_table_columns[0],pairs_table_columns[1],pairs_table_columns[2],
-            pairs_table_columns[0],pairs_table_columns[1]
+                pairs_table,pairs_table_columns[0],pairs_table_columns[1]
         );
         let expect_str = format!("Failed to create table '{}'",pairs_table);
         sqlx::query(&qry_str)
@@ -183,9 +184,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     sigma2 NUMERIC DEFAULT NULL, \
                     sigma2Mod10 SMALLINT GENERATED ALWAYS AS (mod(sigma2,10)) STORED, \
                     sigma2Mod100 SMALLINT GENERATED ALWAYS AS (mod(sigma2,100)) STORED, \
-                    CONSTRAINT oddonlyresults_pk PRIMARY KEY (sqrt) \
+                    CONSTRAINT {}_pk PRIMARY KEY (sqrt) \
             )",
-            odd_only_results_table);
+            odd_only_results_table, odd_only_results_table);
         let expect_str = format!("Failed to create table '{}'",odd_only_results_table);
         sqlx::query(&qry_str)
             .execute(&pool)
@@ -383,98 +384,6 @@ async fn sigma_2_dirichlet(n: u64, primes: &[u64]) -> Result<u128, Box<dyn Error
         eprintln!("Sigma2 result overflowed u128 for n={}. Truncating.", n);
         u128::MAX
     }))
-}
-fn sigma_2(num: i64) -> u128 {
-    // use u128 to avoid overflow on intermediate squares and sums; use saturating_add
-    // to protect against unlikely u128 overflow, and also return the last digit to avoid
-    // parsing huge strings back into numeric types.
-    let num128 = num as u128;
-    let num_2: u128 = num128 * num128;
-    let mut sum_of_squares: u128 = 0;
-    for d in 1..(num128 + 1) {
-        let d_u128 = d as u128;
-        if num_2 % d_u128 == 0 {
-            sum_of_squares = sum_of_squares.saturating_add(d_u128 * d_u128);
-            let flr = num_2 / d_u128;
-            //println!("num_2:{num_2}  d:{d}  flr:{flr}");
-            if d_u128 != flr {
-                sum_of_squares = sum_of_squares.saturating_add(flr * flr);
-            }
-        }
-    }
-    sum_of_squares
-}
-
-/// async get_pairs_old()
-/// Loop through all values (n2) less then the passed number n (see args). Within that loop
-/// loop in reverse through all values starting at k2=n*2.25. for all (n2*k2) + (n2+k2)² that
-/// match the passed sqrt, insert two rows into the pairs table. One for sequenceStart=n2, increment=k2
-/// and one for sequenceStart=k2, increment=n2.
-/// args:
-///   n:i64         the previously processed value where sequenceStart = increment = n
-///   sqrt:i64      √f(n,n), the square root i.e. (n*n) + (n*n)² 
-///   pool:&sqlx::PgPool
-///                 The sqlx connection for INSERTS
-///   sigma2:&String sigma2. For sigma2 values ending in 3 or 9, get_pairs() will stop
-///                 searching for f(n,k) pairs that generate the passed sqrt.
-///   pairs_table:&String
-///                 The table name of the pairs table in the connected database. Passed into
-///                 main() via the JSON parameters file.
-///   pairs_table_columns:&Vec<&str>
-/// results:        Returns no value
-/// 
-///   
-async fn get_pairs_old(n: i64, sqrt: i64, pool: &sqlx::PgPool, sigma2_num: u128, pairs_table: &str, 
-    pairs_table_columns: &Vec<&str>,install_dual_pairs: bool) {
-// Note: the 2.25 multiplier for the upper value was determined by trial and error. It has not
-//       been proved that this number is correct for all n, but has been tested up to n=65505.
-// Note2: See comments at the end of the program where there is an SQL query to validate
-//        this number.
-    let mut upper_k2:i64 = (2.24*n as f32) as i64;
-    let lower_k2:i64 = n+1;
-    println!("getting pairs...");
-    let mut found_count:u128 = 1;  // the row inserted before this subroutine was called
-    for n2 in 1..n {
-        for k2 in (lower_k2..upper_k2).rev() {
-            if sqrt == (n2*k2) + (n2+k2)*(n2+k2) {
-                println!("...{}:{} & {}:{}",n2,k2,k2,n2);
-                let qry_str = format!(
-                    "INSERT INTO {} ({}, {}, {}) VALUES($1,$2,$3) \
-                    ON CONFLICT ({},{}) DO NOTHING",
-                    pairs_table,
-                    pairs_table_columns[0],
-                    pairs_table_columns[1],
-                    pairs_table_columns[2],
-                    pairs_table_columns[0],
-                    pairs_table_columns[1]);
-                let expect_str = format!("Failed insert for {} table in get_pairs() function.",pairs_table);
-                sqlx::query(&qry_str)
-                    .bind(sqrt)
-                    .bind(n2)
-                    .bind(k2)
-                    .execute(pool)
-                    .await
-                    .expect(&expect_str);
-                if install_dual_pairs {
-                    sqlx::query(&qry_str)
-                        .bind(sqrt)
-                        .bind(k2)
-                        .bind(n2)
-                    .execute(pool)
-                    .await
-                    .expect(&expect_str);
-                }
-                upper_k2 = k2-1; // no other upper values >= k2 will work with the increasing n2 values
-                found_count += 2;
-                break;                              
-            }
-            if sigma2_num == 3 || sigma2_num  == 9 {
-                if found_count == sigma2_num {
-                    break;
-                }
-            }
-        }
-    }
 }
 
 /// A helper function to check if a number is a perfect square and return its root.

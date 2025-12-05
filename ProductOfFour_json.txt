@@ -1,14 +1,15 @@
-0{
+{
     "_1":"This is a template file. Rename to ProductOfFour.json. ,
     "_2 : replace fields as needed to connect to the database",
     "_3",
     "_4":"start and end of main loop",
-    "start":55763,
-    "end":125000,
+    "start":1,
+    "end":10000,
     "_5":"--------------------------------",
     "_6":"Table names",
     "oddOnlyResults_table":"oddOnlyResults",
     "pairs_table":"pairs2",
+    "pairs_table_columns":["sqrt","start_incr1","start_incr2"],
     "factors_table":"factors",
     "_7":"Connection requirements",
     "_8":"--------------------------------",
