@@ -170,13 +170,13 @@ As shown in the proof of conjecture 1 above, the count of f(n,k) = f(n<sub>0</su
 values will be odd.
 
 Sample output from main.rs (this project) -> main.rs (factors projet) -> Sigma2MatchesCountMod10.py:
-"square root","base","increment","σ₂([base=increment]²)","count","σ₂() mod 100","σ₂() mod 10","factors of square root"
-5,1,1,1,1,1,1,"5^1"
-20,2,2,21,1,21,1,"2^2  x  5^1"
-45,3,3,91,1,91,1,"3^2  x  5^1"
-80,4,4,341,1,41,1,"2^4  x  5^1"
-125,5,5,651,1,51,1,"5^3"
-180,6,6,1911,1,11,1,"2^2  x  3^2  x  5^1"
+"square root","base","increment","σ₂([base=increment]²)","count","σ₂() mod 100","σ₂() mod 10","factors of square root"\
+5,1,1,1,1,1,1,"5^1"\
+20,2,2,21,1,21,1,"2^2  x  5^1"\
+45,3,3,91,1,91,1,"3^2  x  5^1"\
+80,4,4,341,1,41,1,"2^4  x  5^1"\
+125,5,5,651,1,51,1,"5^3"\
+180,6,6,1911,1,11,1,"2^2  x  3^2  x  5^1"\
 
 [^1]:
     > *When k = 1 the sequence for n = 1,2,3,… is outlined in the Online
